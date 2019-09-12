@@ -1,8 +1,6 @@
 package main
 
 import (
-	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -22,31 +20,28 @@ type QueueEntry struct {
 	ServedAt  time.Time
 }
 
-// MaxNumTimesHelped is a constant which represents the maximum number of
-// times a student can seek help within a 24 hour timeframe.
-const MaxNumTimesHelped = 5
-
 // Queue is the underlying thread-safe data structure (mutex + queue).
 type Queue struct {
 	Mutex   sync.Mutex   // To handle concurrency, prevents multiple users from touching the DS.
 	Entries []QueueEntry // Contains the actual tickets.
+	IsOpen  bool         // Whether the queue is open or closed.
 }
 
 // Main in-memory data structure.
-var queue = Queue{Entries: []QueueEntry{}}
+var queue = Queue{Entries: []QueueEntry{}, IsOpen: false}
 
 // JoinQueue adds the student with name and CSid to the queue.
 // Returns how many students are ahead of the new student in the queue,
 // and the estimated wait time in seconds.
 // If the student has requested help more than MaxNumTimesHelped,
 // returns how many times the students has asked for help already, and -1
-func JoinQueue(name string, CSid string, taskInfo string) (int, int) {
+func JoinQueue(name string, CSid string, taskInfo string) (uint, int) {
 	timesHelped := NumTimesHelped(CSid)
-	if timesHelped < MaxNumTimesHelped {
+	if timesHelped < config.MaxNumTimesHelped {
 		entry := QueueEntry{CSid, name, taskInfo, time.Now(), false, time.Now()}
 		queue.Mutex.Lock()
 		// How many un-served students joined before me?
-		rsf := 0
+		var rsf uint = 0
 		for _, entry := range queue.Entries {
 			if !entry.WasServed {
 				rsf++
@@ -91,7 +86,7 @@ func ServeStudent(CSid string) {
 
 // UnservedEntries returns all tickets that have not been served yet.
 func UnservedEntries() []QueueEntry {
-	acc := []QueueEntry{}
+	var acc []QueueEntry
 	queue.Mutex.Lock()
 	for _, entry := range queue.Entries {
 		if !entry.WasServed {
@@ -103,8 +98,8 @@ func UnservedEntries() []QueueEntry {
 }
 
 // NumTimesHelped returns the number of times the given CSid was helped in the last 24 hours.
-func NumTimesHelped(CSid string) int {
-	acc := 0
+func NumTimesHelped(CSid string) uint {
+	var acc uint = 0
 	queue.Mutex.Lock()
 	for _, entry := range queue.Entries {
 		if entry.CSid == CSid && entry.WasServed && entry.ServedAt.After(time.Now().AddDate(0, 0, -1)) {
@@ -137,17 +132,6 @@ func EstimatedWaitTime() float64 {
 	return acc.Seconds() / float64(count)
 }
 
-// NukeAllTheThings deletes the persistence file and starts the queue from scratch.
-// To be used by TAs only.
-func NukeAllTheThings(ip string) {
-	log.Println("User @", ip, "asked for database deletion. Will do.")
-	queue = Queue{Entries: []QueueEntry{}}
-	err := os.Remove("persistence.json")
-	if err != nil {
-		log.Println("Unable to delete persistence.json", err)
-	}
-}
-
 // QueuePositionForCSID returns whether the given CSid is waiting in the queue,
 // and their position.
 func QueuePositionForCSID(CSid string) (bool, uint) {
@@ -160,4 +144,36 @@ func QueuePositionForCSID(CSid string) (bool, uint) {
 		acc++
 	}
 	return false, 0
+}
+
+// Returns the total number of times students received help
+// throughout the term.
+func TotalNumStudentsHelped() uint {
+	queue.Mutex.Lock()
+	tot := uint(len(queue.Entries))
+	queue.Mutex.Unlock()
+	return tot
+}
+
+// Returns whether the queue is open.
+func IsQueueOpen() bool {
+	queue.Mutex.Lock()
+	result := queue.IsOpen
+	queue.Mutex.Unlock()
+	return result
+}
+
+// Opens the queue, letting students join it.
+func OpenQueue() {
+	queue.Mutex.Lock()
+	queue.IsOpen = true
+	queue.Mutex.Unlock()
+}
+
+// Closes the queue, preventing students from joining.
+// Closing the queue does not kick existing students out.
+func CloseQueue() {
+	queue.Mutex.Lock()
+	queue.IsOpen = false
+	queue.Mutex.Unlock()
 }
